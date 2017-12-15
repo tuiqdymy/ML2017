@@ -1,0 +1,203 @@
+#-*- coding:utf-8 –*-
+
+import operator
+import numpy as np
+import pandas as pd
+
+# 将*.csv转录为Numpy的解析程序
+
+def TrainFile2Matrix(filename):
+
+    pdfile1 = pd.read_csv(filename)
+    pdfile = pdfile1.fillna(0)        # 空缺值设为0
+    fileMat = pdfile.values
+    fileMatLines = fileMat.tolist()   # 读取行
+    numberOfLines = fileMat.shape[0]  # 读取行数,从0开始计数（自动忽略了第一行标签行）
+    returnMat = fileMat[:,1:]   # 创建返回的特征矩阵：为读取数据的后6列
+    returnMat = np.delete(returnMat, 0, axis=1)  # 删去VisitNumber
+    Labels = fileMat[:,0]       # 创建返回的标签矩阵：为读取数据的第1列
+    Labels = Labels.astype(np.int32)
+
+    return returnMat, Labels
+
+
+# 将非数值特征转化为数值(两列）:已经删去VisitNumber了
+def transfer(dataSet):
+    column2 = dataSet[:,0]
+    dict2 = {}
+    substitude = 1
+    for element in column2:
+        if element not in dict2.keys():
+            dict2[element] = substitude
+            substitude += 1
+
+    for i in range(column2.shape[0]):
+        for weekday in dict2.keys():
+            if weekday == column2[i]:
+                column2[i] = dict2[weekday]
+    dataSet[:, 0] = column2
+
+    column5 = dataSet[:, 3]
+    dict5 = {}
+    substitude = 1
+    for element in column5:
+        if element not in dict5.keys():
+            dict5[element] = substitude
+            substitude += 1
+
+    for i in range(column5.shape[0]):
+        for weekday in dict5.keys():
+            if weekday == column5[i]:
+                column5[i] = dict5[weekday]
+    dataSet[:, 3] = column5
+
+    return dataSet
+
+# 将test文件转化为与train格式相同的np.array, 方便送入模型训练
+def TestFile2Matrix(filename):
+
+    pdfile1 = pd.read_csv(filename)
+    pdfile = pdfile1.fillna(0)        # 空缺值设为0
+    fileMat = pdfile.values
+
+    # 选取每个VisitNumber的第一个值作为VisitNumber的特征
+    returnMat= fileMat[0]
+    index = 0
+    for i in range(fileMat.shape[0] - 1):
+        if fileMat[i][0] != fileMat[i + 1][0]:
+            returnMat = np.row_stack((returnMat, fileMat[i + 1]))
+    # 删除VisitNumber
+    returnMat = np.delete(returnMat,0,axis=1)
+    # 将testset中的非数值特征转化为数值特征
+    x_test = transfer(returnMat)
+    return x_test
+
+# 将特征归一化
+def autoNorm(dataSet):
+    dataSet = dataSet.astype('float32')  # 将dataSet数值转成float，方便做除法
+    minVals = dataSet.min(0)   # minVals中为每列的最小值（参数0表示从列中选取,提取成为一行） 返回一维ndarray
+    maxVals = dataSet.max(0)
+    ranges = maxVals - minVals # ranges是一行矩阵，每个特征的range
+    normDataSet = np.zeros(np.shape(dataSet))
+    m = dataSet.shape[0]       # array.shape[0] 行数
+    normDataSet = dataSet - np.tile(minVals, (m,1))   # 矩阵每个元素相减。numpy中tile()函数将变量内容复制成输入矩阵同样大小的矩阵
+                                                      # 将行矩阵minVals复制至m行，1列
+    normDataSet = normDataSet/np.tile(ranges, (m,1))  # 矩阵中的每个数相除
+    return normDataSet
+
+# 生成模型
+def model(trainingSet, labels):
+
+    from sklearn.neighbors import KNeighborsClassifier
+    from sklearn.tree import DecisionTreeClassifier
+    from sklearn.model_selection import train_test_split
+    from sklearn.naive_bayes import MultinomialNB
+    from sklearn.svm import SVC
+
+
+    x_train, x_test, y_train, y_test = train_test_split(trainingSet, labels, test_size=0.001)  # 交叉验证，随机划分数据集
+
+    #clf = SVC(kernel='linear')
+    #clf.fit(x_train, y_train)
+    clf = DecisionTreeClassifier().fit(x_train, y_train)
+    #clf = MultinomialNB(alpha=0.01)
+    #clf.fit(x_train, y_train)
+
+    correct = 0.0
+    for ins in range(x_test.shape[0]):
+        if clf.predict([x_test[ins]])[0] == y_test[ins]:
+            correct += 1
+    correctRate = correct / x_test.shape[0]
+    print correctRate
+
+    return clf  # 返回分类器模型
+
+# 调用上面的函数，自动生成训练集及其标签，并生成分类器
+def ModelMaker(dataSet):
+    x, y = TrainFile2Matrix(dataSet)
+    x = transfer(x)
+    x = autoNorm(x)
+    classifier = model(x,y)
+    return classifier
+
+# 根据模型判断每一个VisitNumber的TripType
+def classify(testSet, classifier):
+    x_test = TestFile2Matrix(testSet)
+    resultList = []
+    for i in range(x_test.shape[0]):
+        result = classifier.predict([x_test[i]])[0]  # clf是传入的分类器
+        resultList.append(result)              # 结果为按顺序存储的列表
+    resultArray = np.array(resultList)         # 将列表转为np.array
+    return resultArray
+
+# 输入train.csv与test.csv，直接给出预测结果
+def classifyFinal(trainSet, testSet):
+    clf = ModelMaker(trainSet)
+    result = classify(testSet, clf)
+    return result  # 返回格式为np.array
+
+
+def output2csv(result, submissioncsv):
+    submission = pd.read_csv(submissioncsv)
+    correspond = {3: 'TripType_9',
+                  4: 'TripType_4',
+                  5: 'TripType_5',
+                  6: 'TripType_6',
+                  7: 'TripType_7',
+                  8: 'TripType_8',
+                  9: 'TripType_9',
+                  12: 'TripType_12',
+                  14: 'TripType_14',
+                  15: 'TripType_15',
+                  18: 'TripType_18',
+                  19: 'TripType_19',
+                  20: 'TripType_20',
+                  21: 'TripType_21',
+                  22: 'TripType_22',
+                  23: 'TripType_23',
+                  24: 'TripType_24',
+                  25: 'TripType_25',
+                  26: 'TripType_26',
+                  27: 'TripType_27',
+                  28: 'TripType_28',
+                  29: 'TripType_29',
+                  30: 'TripType_30',
+                  31: 'TripType_31',
+                  32: 'TripType_32',
+                  33: 'TripType_33',
+                  34: 'TripType_34',
+                  35: 'TripType_35',
+                  36: 'TripType_36',
+                  37: 'TripType_37',
+                  38: 'TripType_38',
+                  39: 'TripType_39',
+                  40: 'TripType_40',
+                  41: 'TripType_41',
+                  42: 'TripType_42',
+                  43: 'TripType_43',
+                  44: 'TripType_44',
+                  999: 'TripType_999'}
+
+    for i in range(result.shape[0]):
+        label = correspond[result[i]]
+        submission.loc[i][label] = 1
+
+    submission.to_csv('submission.csv')  # 输出.csv文件，但此时由于DataFrame的原因多了第一列标签列，下面的代码将其删除
+
+    import csv
+    origin_f = open('submission.csv', 'rb')
+    new_f = open('submission_new.csv', 'wb+')
+    reader = csv.reader(origin_f)
+    writer = csv.writer(new_f)
+    for row in reader:
+        del row[0]
+        writer.writerow(row)
+    origin_f.close()
+    new_f.close()
+
+
+# 调用前面的函数，输入trainingset, testset，输出直接为符合submit格式的.csv文件
+def classifyUltimate(trainingSet, testSet, sample_submission):
+    resultArray = classifyFinal(trainingSet, testSet)
+    output2csv(resultArray, sample_submission)
+
